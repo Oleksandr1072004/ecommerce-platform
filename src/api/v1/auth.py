@@ -1,17 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from src.core.config import settings
 from src.core.database import get_db
 from src.core.security import get_current_user
 from src.models.user import User, UserRole
-from src.schemas.user import (
-    LoginRequest,
-    Token,
-    UserOut,
-    UserRegister,
-    UserUpdate,
-)
+from src.schemas.user import LoginRequest, Token, UserOut, UserRegister, UserUpdate
 from src.services.user_service import UserService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -28,17 +22,33 @@ def register(payload: UserRegister, db: Session = Depends(get_db)) -> UserOut:
 
 @router.post("/login", response_model=Token)
 def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
+    payload: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> Token:
-    token = UserService(db).authenticate(form_data.username, form_data.password)
+    token = UserService(db).authenticate(payload.email, payload.password)
     if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
-            headers={"WWW-Authenticate": "Bearer"},
         )
-    return toke
+
+    # Set HttpOnly cookie so browser pages (e.g. /dashboard) work
+    response.set_cookie(
+        key="access_token",
+        value=token.access_token,
+        httponly=True,
+        samesite="lax",
+        secure=False,   # set True in production
+        max_age=settings.access_token_expire_minutes * 60,
+    )
+    return token
+
+
+@router.post("/logout")
+def logout(response: Response) -> dict[str, str]:
+    response.delete_cookie("access_token")
+    return {"detail": "Logged out"}
 
 
 @router.get("/me", response_model=UserOut)
@@ -72,3 +82,9 @@ def update_user_profile(
 
     updated = UserService(db).update_profile(target, payload.full_name)
     return UserOut.model_validate(updated)
+
+
+@router.post("/logout")
+def logout(response: Response) -> dict[str, str]:
+    response.delete_cookie("access_token")
+    return {"detail": "Logged out"}
