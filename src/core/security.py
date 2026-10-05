@@ -11,10 +11,42 @@ from sqlalchemy.orm import Session
 from src.core.config import settings
 from src.core.database import get_db
 from src.models.user import User, UserRole
+from fastapi import Cookie, Request
+from typing import Annotated
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+def get_current_user_cookie(
+    request: Request,
+    access_token: Annotated[str | None, Cookie()] = None,
+    db: Session = Depends(get_db),
+) -> User:
+    """Auth via HttpOnly cookie OR Authorization header (for HTML pages)."""
+    token = access_token
+
+    # Fallback to Authorization header
+    if token is None:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth.removeprefix("Bearer ")
+
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
+    payload = decode_token(token)
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+
+    user_id = payload.get("sub")
+    user = db.get(User, int(user_id)) if user_id else None
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    return user
 
 
 # ---------- Passwords ----------
